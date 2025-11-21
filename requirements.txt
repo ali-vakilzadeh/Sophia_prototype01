@@ -1,0 +1,18 @@
+# Sophia Prototype - Python Dependencies (Stage 3 Complete)
+
+# Vector Store (Local, Zero Cost)
+chromadb
+
+# API calls to OpenRouter
+requests
+
+# Environment configuration
+python-dotenv
+
+# Required by ChromaDB
+pydantic
+
+# UI Framework
+streamlit
+
+# All stages complete - no additional dependencies needed!
