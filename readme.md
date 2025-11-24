@@ -22,6 +22,12 @@ All powered by AI, with intelligent context retrieval from your documents.
 - Rev 0.1: Updated direct AI controlled tool call for RAG access:
 Now the AI can directly send queries to RAG for enhanced workflow generation.
 
+- Rev 0.2: Added features
+** Added user setting "API key" and "model" at the beginning if UI rendering (no need to edit the .env)
+** The file uploader can safely read markdown files as well as txt
+** The workflow executer will let user to retry failed tasks manually
+** Generated files can be indexed as training for next workflow
+
 ---
 
 ## ✨ Key Features
