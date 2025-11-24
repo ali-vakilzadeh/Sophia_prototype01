@@ -65,6 +65,9 @@ def init_session_state():
     defaults = {
         'config': None,
         'collection': None,
+        'user_api_key': '',
+        'user_model': '',
+        'api_configured': False,
         'document_indexed': False,
         'doc_name': None,
         'doc_content': None,
@@ -81,7 +84,9 @@ def init_session_state():
         'generation_complete': False,
         'indexed_files': [],  # List of dicts: [{name, chunks, timestamp}, ...]
         'total_chunks_indexed': 0,
-        'pending_files': []  # Files uploaded but not yet indexed
+        'pending_files': [],  # Files uploaded but not yet indexed
+        'failed_tasks': [],  # List of dicts: [{task_index, task, error}, ...]
+        'task_outputs': {}  #dict: {taksk_index, output_content}
     }
     
     for key, value in defaults.items():
@@ -94,34 +99,36 @@ def init_session_state():
 # ============================================================================
 
 def initialize_system():
-    """Initialize with comprehensive error handling."""
+    """Initialize with user-provided or .env configuration."""
     try:
         with st.spinner("Initializing Sophia..."):
-            if st.session_state.config is None:
-                st.session_state.config = load_env_config()
+            # Try loading from .env first (for defaults)
+            try:
+                env_config = load_env_config()
+                if not st.session_state.user_api_key:
+                    st.session_state.user_api_key = env_config['api_key']
+                if not st.session_state.user_model:
+                    st.session_state.user_model = env_config['model']
+            except ConfigurationError:
+                # .env not found or invalid - that's okay, user will input
+                pass
+            
+            # Use user-provided values if available
+            if st.session_state.user_api_key and st.session_state.user_model:
+                st.session_state.config = {
+                    'api_key': st.session_state.user_api_key,
+                    'model': st.session_state.user_model,
+                    'max_retries': 3,
+                    'timeout': 60,
+                    'chunk_size': 800,
+                    'chunk_overlap': 200
+                }
+                st.session_state.api_configured = True
             
             if st.session_state.collection is None:
                 st.session_state.collection = initialize_vector_store()
         
         return True, None
-        
-    except ConfigurationError as e:
-        error_msg = f"""
-        ❌ **Configuration Error**
-        
-        {str(e)}
-        
-        **How to fix:**
-        1. Create a `.env` file in the project directory
-        2. Add your OpenRouter API key:
-           ```
-           OPENROUTER_API_KEY=sk-or-v1-...
-           OPENROUTER_MODEL=anthropic/claude-3.5-sonnet
-           ```
-        3. Get an API key at: https://openrouter.ai/keys
-        4. Restart the app
-        """
-        return False, error_msg
         
     except VectorStoreError as e:
         error_msg = f"""
@@ -159,8 +166,8 @@ def render_header():
     col1, col2, col3 = st.columns([4, 1, 1])
     
     with col1:
-        st.title("🤖 Sophia - AI Project Planning Assistant")
-        st.markdown("*Transform project specifications into structured planning workflows*")
+        st.title("🤖 Sophia - AI Project Assistant")
+        st.markdown("*Non-autonomous prototype: Use AI to design workflows and execute them + self-retrain!*")
     
     with col2:
         if st.session_state.config:
@@ -170,16 +177,93 @@ def render_header():
     with col3:
         st.info("📦 v1.0 (Stage 3)")
 
+def render_api_configuration():
+    """Render API configuration section."""
+    st.header("🔑 Configure AI Model")
+    
+    if st.session_state.api_configured:
+        col1, col2, col3 = st.columns([2, 2, 1])
+        with col1:
+            st.success(f"Model: {st.session_state.user_model}")
+        with col2:
+            api_key_masked = st.session_state.user_api_key[:8] + "..." + st.session_state.user_api_key[-4:]
+            st.success(f"API Key: {api_key_masked}")
+        with col3:
+            if st.button("Change", use_container_width=True):
+                st.session_state.api_configured = False
+                st.rerun()
+    else:
+        col1, col2 = st.columns([2, 1])
+        
+        with col1:
+            st.info("Configure your AI model to start. You can use OpenRouter, OpenAI, or compatible APIs.")
+        
+        with col2:
+            with st.expander("Where to get API keys", expanded=False):
+                st.markdown("""
+                **OpenRouter** (Recommended)
+                - Sign up at [openrouter.ai](https://openrouter.ai)
+                - Get key at [openrouter.ai/keys](https://openrouter.ai/keys)
+                - Access to Claude, GPT-4, and more
+                
+                **OpenAI**
+                - Sign up at [platform.openai.com](https://platform.openai.com)
+                - Use model: `gpt-4` or `gpt-3.5-turbo`
+                """)
+        
+        # Input fields
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            api_key_input = st.text_input(
+                "API Key",
+                value=st.session_state.user_api_key,
+                type="password",
+                placeholder="sk-or-v1-... or sk-...",
+                help="Your OpenRouter or OpenAI API key"
+            )
+        
+        with col2:
+            model_input = st.text_input(
+                "Model Name",
+                value=st.session_state.user_model,
+                placeholder="anthropic/claude-3.5-sonnet or gpt-4",
+                help="Full model identifier (e.g., anthropic/claude-3.5-sonnet for OpenRouter)"
+            )
+        
+        # Validate and save
+        if api_key_input and model_input:
+            if len(api_key_input) < 10:
+                st.warning("API key seems too short")
+            elif not model_input.strip():
+                st.warning("Please enter a model name")
+            else:
+                if st.button("Save Configuration", type="primary", use_container_width=True):
+                    st.session_state.user_api_key = api_key_input
+                    st.session_state.user_model = model_input
+                    st.session_state.config = {
+                        'api_key': api_key_input,
+                        'model': model_input,
+                        'max_retries': 3,
+                        'timeout': 60,
+                        'chunk_size': 800,
+                        'chunk_overlap': 200
+                    }
+                    st.session_state.api_configured = True
+                    st.success("✅ Configuration saved!")
+                    st.rerun()
+        else:
+            st.warning("Please provide both API key and model name to continue")
 
 def render_sidebar():
     """Enhanced sidebar with history and templates."""
-    with st.sidebar.expander("🐛 Debug Info", expanded=False):
+    with st.sidebar.expander("Debug Info", expanded=False):
         st.write("Pending files:", len(st.session_state.pending_files))
         st.write("Indexed files:", len(st.session_state.indexed_files))
         st.write("AI in progress:", st.session_state.ai_generation_in_progress)
         st.write("Generation complete:", st.session_state.generation_complete)
         st.write("Workflow exists:", st.session_state.workflow is not None)
-        st.sidebar.header("📊 Progress")
+        st.sidebar.header("Progress")
     
     # Progress tracking
     steps = [
@@ -250,9 +334,9 @@ def render_file_upload():
     
     with col1:
         uploaded_files = st.file_uploader(
-            "Upload project specification files (.txt)",
-            type=['txt'],
-            help="Upload one or multiple text files with your project requirements",
+            "Upload project specification files (.txt, .md)",
+            type=['txt', 'md'],  # CHANGED: Added 'md'
+            help="Upload one or multiple text or markdown files with your project requirements",
             accept_multiple_files=True,  # ENABLE MULTI-FILE
             key="file_uploader"
         )
@@ -266,8 +350,12 @@ def render_file_upload():
         - Timeline & budget
         - Team structure
         
+        **Accepted formats:**
+        - Plain text (.txt)
+        - Markdown (.md)
+        
         **Multi-file support:**
-        Upload multiple related documents!
+        Upload multiple documents!
         """)
     
     # Show currently indexed files
@@ -733,6 +821,8 @@ def render_workflow_execution():
         output_files = []
         previous_outputs = []
         errors = []
+        st.session_state.failed_tasks = []  # Reset failed tasks
+        st.session_state.task_outputs = {}  # Reset task outputs
         
         # Progress
         progress_bar = st.progress(0)
@@ -767,6 +857,7 @@ def render_workflow_execution():
                         
                         output_files.append(output_path)
                         previous_outputs.append(f"[Task {task['task_id']}]\n{result}")
+                        st.session_state.task_outputs[i-1] = result
                         
                         st.success(f"✅ Complete! → `{output_path}`")
                         
@@ -789,6 +880,15 @@ def render_workflow_execution():
                             "type": error_type
                         })
                         
+                        # Store failed task for retry
+                        st.session_state.failed_tasks.append({  
+                            'task_index': i - 1,
+                            'task': task,
+                            'error': result,
+                            'error_type': error_type,
+                            'previous_outputs': previous_outputs.copy()
+                        })
+
                         # Provide recovery options
                         if error_type == "AI_ERROR":
                             st.warning("💡 Try: Check API key, wait a moment, retry")
@@ -816,6 +916,90 @@ def render_workflow_execution():
         
         st.info(f"💾 History saved: `{history_file}`")
 
+# ADD this new function after render_workflow_execution():
+
+def render_retry_failed_tasks():
+    """Allow user to retry failed tasks."""
+    if st.session_state.failed_tasks:
+        st.divider()
+        st.header("🔄 Retry Failed Tasks (check you AI API connection before retry)")
+        
+        st.warning(f"⚠️ {len(st.session_state.failed_tasks)} task(s) failed during execution")
+        
+        for failed_info in st.session_state.failed_tasks:
+            task_idx = failed_info['task_index']
+            task = failed_info['task']
+            error = failed_info['error']
+            error_type = failed_info['error_type']
+            
+            with st.expander(f"❌ Task {task_idx + 1}: {task['name']}", expanded=True):
+                st.error(f"**Error:** {error}")
+                
+                if error_type == "AI_ERROR":
+                    st.info("💡 **Likely cause:** API rate limiting or temporary service issue")
+                    st.caption("**Suggestion:** Wait a moment and retry")
+                elif error_type == "VECTOR_ERROR":
+                    st.info("💡 **Likely cause:** Database access issue")
+                    st.caption("**Suggestion:** Try restarting the app")
+                else:
+                    st.info("💡 **Likely cause:** Unexpected error")
+                
+                col1, col2 = st.columns([1, 3])
+                
+                with col1:
+                    if st.button(f"🔄 Retry Task {task_idx + 1}", 
+                               key=f"retry_task_{task_idx}",
+                               type="primary",
+                               use_container_width=True):
+                        
+                        with st.spinner(f"Retrying Task {task_idx + 1}..."):
+                            # Retry the task
+                            success, result, new_error_type = execute_task_safe(
+                                task=task,
+                                collection=st.session_state.collection,
+                                api_key=st.session_state.config['api_key'],
+                                model=st.session_state.config['model'],
+                                config=st.session_state.config,
+                                previous_outputs=failed_info['previous_outputs']
+                            )
+                            
+                            if success:
+                                # Save output
+                                output_path = save_output(
+                                    content=result,
+                                    task_name=task['name'],
+                                    output_format=task['output_format']
+                                )
+                                
+                                # Update state
+                                st.session_state.output_files.append(output_path)
+                                st.session_state.task_outputs[task_idx] = result
+                                
+                                # Remove from failed tasks
+                                st.session_state.failed_tasks = [
+                                    f for f in st.session_state.failed_tasks 
+                                    if f['task_index'] != task_idx
+                                ]
+                                
+                                # Remove from errors
+                                st.session_state.execution_errors = [
+                                    e for e in st.session_state.execution_errors
+                                    if e.get('task') != task['name']
+                                ]
+                                
+                                st.success(f"✅ Task {task_idx + 1} completed successfully!")
+                                st.info(f"📁 Saved to: `{output_path}`")
+                                
+                                import time
+                                time.sleep(1)
+                                st.rerun()
+                            else:
+                                st.error(f"❌ Retry failed: {result}")
+                                st.warning("💡 You can try again after waiting a bit longer")
+                
+                with col2:
+                    st.caption(f"**Original error type:** {error_type}")
+                    st.caption("Retrying will use the same context and previous outputs")
 
 def render_outputs_section():
     """Enhanced output download section."""
@@ -858,6 +1042,94 @@ def render_outputs_section():
                         use_container_width=True
                     )
 
+# New feature: add generated data to training for next workflow
+
+def render_add_to_training_section():
+    """Allow user to add generated outputs to ChromaDB for next workflow."""
+    if st.session_state.output_files and st.session_state.workflow_executed:
+        st.divider()
+        st.header("🔄 Continue with Generated Files")
+        
+        st.info("""
+        💡 **Pro tip:** Add generated files to training to create follow-up workflows 
+        based on what you just created!
+        
+        For example:
+        - Generate a project plan, then create implementation details
+        - Create WBS, then develop detailed task breakdowns
+        - Make requirements doc, then generate test plans
+        """)
+        
+        col1, col2 = st.columns([1, 1])
+        
+        with col1:
+            if st.button("📚 Add Generated Files to Training & Start New Workflow", 
+                        type="primary", 
+                        use_container_width=True):
+                with st.spinner("Adding generated files to training..."):
+                    progress_bar = st.progress(0)
+                    total_files = len(st.session_state.output_files)
+                    
+                    newly_indexed = []
+                    
+                    for idx, filepath in enumerate(st.session_state.output_files, 1):
+                        try:
+                            # Read the file
+                            with open(filepath, 'r', encoding='utf-8') as f:
+                                content = f.read()
+                            
+                            # Get filename
+                            filename = os.path.basename(filepath)
+                            
+                            # Index it
+                            result = index_document(
+                                st.session_state.collection,
+                                content,
+                                filename,
+                                st.session_state.config
+                            )
+                            
+                            newly_indexed.append({
+                                'name': filename,
+                                'chunks': result['chunks_indexed'],
+                                'timestamp': datetime.now().strftime("%H:%M:%S")
+                            })
+                            
+                            progress_bar.progress(idx / total_files)
+                            
+                        except Exception as e:
+                            st.error(f"❌ Failed to index {filename}: {str(e)}")
+                    
+                    # Add to indexed files
+                    st.session_state.indexed_files.extend(newly_indexed)
+                    st.session_state.total_chunks_indexed = sum(
+                        f['chunks'] for f in st.session_state.indexed_files
+                    )
+                    
+                    # Reset workflow state but keep files indexed
+                    st.session_state.workflow = None
+                    st.session_state.workflow_executed = False
+                    st.session_state.output_files = []
+                    st.session_state.execution_errors = []
+                    st.session_state.template_mode = False
+                    st.session_state.selected_template = None
+                    st.session_state.ai_generation_in_progress = False
+                    st.session_state.generation_complete = False
+                    
+                    progress_bar.progress(1.0)
+                    st.success(f"✅ Added {len(newly_indexed)} files to training!")
+                    st.balloons()
+                    
+                    import time
+                    time.sleep(1)
+                    st.rerun()
+        
+        with col2:
+            st.caption("This will:")
+            st.caption("✅ Index all generated files")
+            st.caption("✅ Keep them with original files")
+            st.caption("✅ Reset workflow for new generation")
+            st.caption("✅ Preserve all indexed content")
 
 def render_reset_section():
     """Reset workflow with confirmation."""
@@ -928,6 +1200,15 @@ def main():
     
     # Main workflow
     
+    # Step 0: API Configuration (MUST be configured first)
+    render_api_configuration()
+    
+    if not st.session_state.api_configured:
+        st.info("👆 Please configure your API key and model above to continue")
+        st.stop()
+    
+    st.divider()
+
     # Step 1: Upload
     has_new_files = render_file_upload()
     
@@ -973,11 +1254,17 @@ def main():
         # Step 4: Execute
         render_workflow_execution()
     
+    if st.session_state.failed_tasks and st.session_state.workflow_executed:
+        render_retry_failed_tasks()
+
     if st.session_state.workflow_executed:
         st.divider()
         
         # Step 5: Download
         render_outputs_section()
+
+        # Step 6: Add to training for next workflow
+        render_add_to_training_section()
         
         # Reset
         render_reset_section()
