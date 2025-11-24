@@ -285,6 +285,77 @@ class AIError(Exception):
     """Raised when AI API calls fail."""
     pass
 
+# ============================================================================
+# TOOL CALLING FOR AI - ChromaDB Query Integration
+# ============================================================================
+
+def get_chromadb_query_tool() -> Dict:
+    """
+    Define the ChromaDB query tool for AI to use.
+    
+    Returns:
+        Tool definition in OpenAI function calling format
+    """
+    return {
+        "type": "function",
+        "function": {
+            "name": "query_project_documents",
+            "description": "Search the indexed project documents to retrieve relevant context. Use this to find specific information from the project specification, requirements, or any uploaded documents.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "The search query to find relevant information. Be specific about what you're looking for (e.g., 'project timeline and deadlines', 'technical requirements', 'team structure and roles')."
+                    },
+                    "top_k": {
+                        "type": "integer",
+                        "description": "Number of relevant chunks to retrieve (1-10). Use more for comprehensive context, fewer for specific facts.",
+                        "default": 5
+                    }
+                },
+                "required": ["query"]
+            }
+        }
+    }
+
+
+def execute_tool_call(
+    tool_name: str,
+    tool_arguments: Dict,
+    collection: chromadb.Collection
+    ) -> str:
+    """
+    Execute a tool call requested by the AI.
+    
+    Args:
+        tool_name: Name of the tool to execute
+        tool_arguments: Arguments passed by AI
+        collection: ChromaDB collection
+    
+    Returns:
+        Tool execution result as string
+    """
+    if tool_name == "query_project_documents":
+        print("tool call:", tool_arguments)
+        query = tool_arguments.get("query", "")
+        top_k = tool_arguments.get("top_k", 5)
+        
+        # Execute the query
+        results = query_vector_store(collection, query, top_k)
+        
+        # Format results for AI
+        formatted_results = []
+        for idx, result in enumerate(results, 1):
+            formatted_results.append(
+                f"[Result {idx}] (Relevance: {result['relevance']:.2f})\n{result['text']}"
+            )
+        
+        return "\n\n---\n\n".join(formatted_results)
+    
+    else:
+        return f"Error: Unknown tool '{tool_name}'"
+
 def clean_json_response(response: str) -> str:
     """
     Clean AI response to extract valid JSON.
@@ -324,17 +395,21 @@ def call_openrouter_with_retry(
     api_key: str,
     model: str,
     config: Dict,
-    response_format: Optional[str] = None
+    response_format: Optional[str] = None,
+    tools: Optional[List[Dict]] = None,
+    collection: Optional[chromadb.Collection] = None
 ) -> str:
     """
-    Call OpenRouter with exponential backoff retry logic.
+    Call OpenRouter with exponential backoff retry logic and tool support.
     
     Args:
         prompt: Input prompt
         api_key: API key
         model: Model identifier
         config: Configuration with retry settings
-        response_format: Optional "json" for JSON mode (handled via prompt)
+        response_format: Optional "json" for JSON mode
+        tools: Optional list of tool definitions
+        collection: Optional ChromaDB collection for tool execution
     
     Returns:
         AI response text
@@ -347,7 +422,7 @@ def call_openrouter_with_retry(
     max_retries = config.get('max_retries', 3)
     timeout = config.get('timeout', 60)
     
-    # If JSON requested, enhance the prompt instead of using API parameter
+    # If JSON requested, enhance the prompt
     if response_format == "json":
         prompt = f"""{prompt}
 
@@ -358,23 +433,28 @@ CRITICAL FORMATTING INSTRUCTIONS:
 - Start your response with {{ and end with }}
 - Ensure all JSON is properly formatted and parseable"""
     
+    # Build conversation history for tool calling
+    messages = [{"role": "user", "content": prompt}]
+    
     for attempt in range(max_retries):
         try:
             headers = {
                 "Authorization": f"Bearer {api_key}",
                 "Content-Type": "application/json",
-                "HTTP-Referer": "https://sophia-planner.app",  # Optional: for better tracking
-                "X-Title": "Sophia Project Planner"  # Optional: for better tracking
+                "HTTP-Referer": "https://pmia.app",
+                "X-Title": "Sophia Project Assistant Prototype"
             }
             
             payload = {
                 "model": model,
-                "messages": [{"role": "user", "content": prompt}],
-                "temperature": 0.7,  # Slight randomness for creativity
-                "max_tokens": 4000   # Ensure we get complete responses
+                "messages": messages,
+                "temperature": 0.7,
+                "max_tokens": 4000
             }
             
-            # DO NOT add response_format parameter - causes issues with OpenRouter
+            # Add tools if provided
+            if tools:
+                payload["tools"] = tools
             
             response = requests.post(
                 "https://openrouter.ai/api/v1/chat/completions",
@@ -386,10 +466,51 @@ CRITICAL FORMATTING INSTRUCTIONS:
             response.raise_for_status()
             result = response.json()
             
-            # Extract content
-            content = result['choices'][0]['message']['content']
+            print("result:", result)
+
+            message = result['choices'][0]['message']
             
-            # If JSON was requested, clean up the response
+            # Check if AI wants to use tools
+            if message.get('tool_calls') and collection:
+                # AI is requesting tool execution
+                tool_calls = message['tool_calls']
+                print(f"AI requested {len(tool_calls)} tool call(s)")
+
+                # Add assistant message to conversation
+                messages.append(message)
+                
+                # Execute each tool call
+                for tool_call in tool_calls:
+                    tool_name = tool_call['function']['name']
+                    tool_args = json.loads(tool_call['function']['arguments'])
+
+                    print(f" AI called tool: {tool_name}")
+                    print(f" Arguments: {tool_args}")
+                    
+                    # Execute the tool
+                    tool_result = execute_tool_call(tool_name, tool_args, collection)
+                    
+                    print(f"Tool result length: {len(tool_result)} chars")
+                    print(f"Preview: {tool_result[:200]}...")
+
+                    # Add tool result to conversation
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tool_call['id'],
+                        "name": tool_name,
+                        "content": tool_result
+                    })
+                
+                # Make another API call with tool results
+                continue  # This will loop back and call API again
+            
+            # No tool calls, return the content
+            content = message.get('content', '')
+            
+            if not content:
+                raise AIError("AI returned empty response")
+            
+            # Clean JSON if requested
             if response_format == "json":
                 content = clean_json_response(content)
             
@@ -397,24 +518,22 @@ CRITICAL FORMATTING INSTRUCTIONS:
             
         except requests.exceptions.Timeout:
             if attempt < max_retries - 1:
-                wait_time = 2 ** attempt  # Exponential backoff
+                wait_time = 2 ** attempt
                 time.sleep(wait_time)
                 continue
             raise AIError(f"API request timed out after {max_retries} attempts")
             
         except requests.exceptions.HTTPError as e:
-            # Check for specific error codes
             if e.response.status_code == 400:
-                raise AIError(f"Bad request to OpenRouter API. Check your model name and parameters. Error: {str(e)}")
+                raise AIError(f"Bad request to OpenRouter API. Error: {str(e)}")
             elif e.response.status_code == 401:
-                raise AIError("Invalid API key. Please check your OPENROUTER_API_KEY in settings.")
+                raise AIError("Invalid API key. Check your OPENROUTER_API_KEY.")
             elif e.response.status_code == 429:
-                # Rate limited
                 if attempt < max_retries - 1:
-                    wait_time = 5 * (2 ** attempt)  # Longer backoff for rate limits
+                    wait_time = 5 * (2 ** attempt)
                     time.sleep(wait_time)
                     continue
-                raise AIError("Rate limited by OpenRouter. Please wait a moment and try again.")
+                raise AIError("Rate limited. Please wait and try again.")
             else:
                 if attempt < max_retries - 1:
                     wait_time = 2 ** attempt
@@ -512,7 +631,7 @@ def generate_workflow_from_ai(
 PROJECT SPECIFICATION:
 {context}
 
-Generate a JSON workflow with 4-7 tasks covering:
+Generate a JSON workflow with 4 to 15 tasks covering:
 - Requirements analysis or WBS
 - Task breakdown and dependencies
 - Resource planning
@@ -537,12 +656,23 @@ IMPORTANT:
 - Start your response with {{ and end with }}
 - Do NOT wrap in markdown code blocks"""
     
-    # Call AI
-    response = call_openrouter_with_retry(prompt, api_key, model, config, response_format="json")
+    # Call AI with tool support
+    tools = [get_chromadb_query_tool()]
+    
+    response = call_openrouter_with_retry(
+        prompt=prompt,
+        api_key=api_key,
+        model=model,
+        config=config,
+        response_format="json",
+        tools=tools,
+        collection=collection
+    )
     
     # Parse and validate
     try:
         workflow = json.loads(response)
+        
     except json.JSONDecodeError as e:
         raise ValueError(f"AI returned invalid JSON: {str(e)}")
     
@@ -576,14 +706,13 @@ def generate_workflow_from_ai_with_goal(
         AIError: If generation fails
         ValueError: If workflow is invalid
     """
-    #debug: check inquiry is launched:
-    print("Function called:", config, workflow_goal)
+    
     # Retrieve context
     context_chunks = query_vector_store(collection, 
         "project specification requirements objectives", top_k=10)
     
     context = "\n\n---\n\n".join([chunk['text'] for chunk in context_chunks])
-    print("context generated, length:", len(context))
+    
     # Enhanced prompt with user goal
     prompt = f"""Based on the following project specification, generate a workflow JSON that breaks down into discrete AI tasks.
 
@@ -624,19 +753,26 @@ IMPORTANT:
 - Start your response with {{ and end with }}
 - Do NOT wrap in markdown code blocks"""
     
-    print ("prompt generated - len: ", len(prompt)," chars")
-    # Call AI with the enhanced prompt
-    response = call_openrouter_with_retry(prompt, api_key, model, config, response_format="json")
-    print("responce received ", len(response), " chars")
+    # Call AI with tool support
+    tools = [get_chromadb_query_tool()]
+    
+    response = call_openrouter_with_retry(
+        prompt=prompt,
+        api_key=api_key,
+        model=model,
+        config=config,
+        response_format="json",
+        tools=tools,
+        collection=collection
+    )
+    
     # Parse and validate
     try:
         workflow = json.loads(response)
-        print("json parsed")
     except json.JSONDecodeError as e:
         raise ValueError(f"AI returned invalid JSON: {str(e)}")
     
     is_valid, error_msg = validate_workflow_json(workflow)
-    print("workflow validated")
     if not is_valid:
         raise ValueError(f"Invalid workflow structure: {error_msg}")
     
@@ -725,8 +861,17 @@ def execute_task_safe(
 
 Provide detailed output in {task['output_format']} format."""
         
-        # Execute
-        result = call_openrouter_with_retry(final_prompt, api_key, model, config)
+        # Execute with tool support
+        tools = [get_chromadb_query_tool()]
+        
+        result = call_openrouter_with_retry(
+            prompt=final_prompt,
+            api_key=api_key,
+            model=model,
+            config=config,
+            tools=tools,
+            collection=collection
+        )
         
         return True, result, None
         

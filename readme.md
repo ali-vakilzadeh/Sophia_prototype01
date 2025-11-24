@@ -18,6 +18,10 @@ Sophia takes your project specification document and automatically generates com
 
 All powered by AI, with intelligent context retrieval from your documents.
 
+### Updated features:
+- Rev 0.1: Updated direct AI controlled tool call for RAG access:
+Now the AI can directly send queries to RAG for enhanced workflow generation.
+
 ---
 
 ## ✨ Key Features
