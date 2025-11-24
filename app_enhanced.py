@@ -1118,7 +1118,7 @@ def render_add_to_training_section():
                     
                     progress_bar.progress(1.0)
                     st.success(f"✅ Added {len(newly_indexed)} files to training!")
-                    st.balloons()
+                    #st.balloons()
                     
                     import time
                     time.sleep(1)
