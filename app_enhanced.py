@@ -348,7 +348,7 @@ def render_file_upload():
 def render_indexing_section():
     """Enhanced indexing with multi-file batch processing."""
     st.header("🔍 Step 2: Index Documents")
-    print("rendering indexing section")
+    
     if not st.session_state.pending_files:
         st.warning("⚠️ No new files to index. Upload files first!")
         return
@@ -430,7 +430,7 @@ def render_indexing_section():
 def render_template_or_ai_choice():
     """Let user choose between template and AI workflow generation."""
     st.header("🗺️ Step 3: Generate Workflow")
-    print("rendering template builder")
+    
     st.info("Choose how to generate your workflow:")
     
     col1, col2 = st.columns(2)
@@ -503,12 +503,12 @@ def render_template_or_ai_choice():
             use_container_width=True,
             disabled=button_disabled
             ):
-            print("AI generate Button sensed")
+            
             if len(workflow_target.strip()) < 20:
                 st.error("❌ Please provide a more detailed workflow goal (minimum 20 characters)")
             else:
                 # Store the target and trigger generation
-                print("AI generate selected and launched")
+                
                 st.session_state.workflow_target = workflow_target
                 st.session_state.template_mode = False
                 st.session_state.ai_generation_in_progress = True
@@ -537,12 +537,11 @@ def render_template_or_ai_choice():
             
             **Pro tip:** Mention specific deliverables you need (WBS, timeline, budget, etc.)
             """)
-    print("Render AI Session Concluded, workflow length:", st.session_state.workflow)
 
 def render_workflow_generation_ai():
     """Generate workflow using AI with detailed progress indicators."""
     st.header("✨ Generating AI Workflow")
-    print("Render workflow gen AI launched")
+    
     # Show workflow goal
     st.info(f"🎯 **Goal:** {st.session_state.workflow_target}")
     
@@ -955,7 +954,7 @@ def main():
         # Step 3: Generate workflow
         if not st.session_state.workflow:
             if st.session_state.template_mode is False and st.session_state.selected_template is None and st.session_state.ai_generation_in_progress is False:
-                print("render path 1")
+                
                 render_template_or_ai_choice()
             elif st.session_state.template_mode:
                 if not st.session_state.generation_complete:
@@ -963,7 +962,7 @@ def main():
             elif st.session_state.ai_generation_in_progress:
                 render_workflow_generation_ai()
             else:
-                print("render path 2")
+                
                 render_template_or_ai_choice()
         else:
             render_workflow_display()

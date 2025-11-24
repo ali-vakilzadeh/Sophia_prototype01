@@ -337,7 +337,8 @@ def execute_tool_call(
         Tool execution result as string
     """
     if tool_name == "query_project_documents":
-        print("tool call:", tool_arguments)
+        
+        print("tool call is running")
         query = tool_arguments.get("query", "")
         top_k = tool_arguments.get("top_k", 5)
         
@@ -465,8 +466,6 @@ CRITICAL FORMATTING INSTRUCTIONS:
             
             response.raise_for_status()
             result = response.json()
-            
-            print("result:", result)
 
             message = result['choices'][0]['message']
             
@@ -474,8 +473,7 @@ CRITICAL FORMATTING INSTRUCTIONS:
             if message.get('tool_calls') and collection:
                 # AI is requesting tool execution
                 tool_calls = message['tool_calls']
-                print(f"AI requested {len(tool_calls)} tool call(s)")
-
+                
                 # Add assistant message to conversation
                 messages.append(message)
                 
@@ -483,16 +481,10 @@ CRITICAL FORMATTING INSTRUCTIONS:
                 for tool_call in tool_calls:
                     tool_name = tool_call['function']['name']
                     tool_args = json.loads(tool_call['function']['arguments'])
-
-                    print(f" AI called tool: {tool_name}")
-                    print(f" Arguments: {tool_args}")
                     
                     # Execute the tool
                     tool_result = execute_tool_call(tool_name, tool_args, collection)
                     
-                    print(f"Tool result length: {len(tool_result)} chars")
-                    print(f"Preview: {tool_result[:200]}...")
-
                     # Add tool result to conversation
                     messages.append({
                         "role": "tool",
